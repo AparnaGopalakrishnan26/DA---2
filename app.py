@@ -22,13 +22,14 @@ warnings.filterwarnings('ignore')
 # Machine Learning imports
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.linear_model import LogisticRegression, Ridge, Lasso
+from sklearn.linear_model import LogisticRegression, Ridge, Lasso, LinearRegression
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import (classification_report, confusion_matrix, roc_auc_score, roc_curve,
                             silhouette_score, silhouette_samples,
-                            r2_score, mean_squared_error, mean_absolute_error)
+                            r2_score, mean_squared_error, mean_absolute_error, 
+                            accuracy_score, precision_score, recall_score, f1_score)
 from mlxtend.frequent_patterns import apriori, association_rules
 
 # Set page config
@@ -72,17 +73,27 @@ st.markdown("""
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
+def fix_dtypes_for_arrow(df):
+    """Fix pandas nullable dtypes for Arrow compatibility"""
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+    for col in df.columns:
+        if hasattr(df[col].dtype, 'name'):
+            if df[col].dtype.name == 'Int64':
+                df[col] = df[col].astype('float64')
+            elif df[col].dtype.name == 'boolean':
+                df[col] = df[col].astype('bool')
+    return df
+
 @st.cache_data
 def load_default_data():
     """Load synthetic dataset"""
-    # GitHub raw URL for the dataset
-    url = "https://raw.githubusercontent.com/yourusername/procureai-data/main/ProcureAI_Survey_Data.csv"
-    
+    # Try to load from GitHub or local
     try:
-        df = pd.read_csv(url)
+        df = pd.read_csv("ProcureAI_Survey_Data.csv")
         return df
     except:
-        # If GitHub fails, generate synthetic data
         return generate_synthetic_data()
 
 def generate_synthetic_data(n=600):
@@ -112,13 +123,11 @@ def generate_synthetic_data(n=600):
         'Pain_Manual_RFQ': np.random.randint(1, 6, n),
         'Pain_Vendor_Risk': np.random.randint(1, 6, n),
         'Pain_Compliance': np.random.randint(1, 6, n),
-        'Avg_Pain_Score': np.random.uniform(1, 5, n),
         
         # Feature Values
         'Values_Automation': np.random.randint(1, 6, n),
         'Values_Risk_Assessment': np.random.randint(1, 6, n),
         'Values_Compliance': np.random.randint(1, 6, n),
-        'Avg_Feature_Value': np.random.uniform(1, 5, n),
         
         # Intent & Budget
         'Interest_Level': np.random.randint(1, 6, n),
@@ -133,11 +142,15 @@ def generate_synthetic_data(n=600):
     df['Avg_Pain_Score'] = df[['Pain_Manual_RFQ', 'Pain_Vendor_Risk', 'Pain_Compliance']].mean(axis=1)
     df['Avg_Feature_Value'] = df[['Values_Automation', 'Values_Risk_Assessment', 'Values_Compliance']].mean(axis=1)
     
-    # Create target for classification (Hot Lead: 1, Not Hot: 0)
+    # Create target for classification
     df['Is_Hot_Lead'] = ((df['Interest_Level'] >= 4) & (df['Avg_Pain_Score'] >= 3.5)).astype(int)
     
-    # Create cluster labels (will be recalculated)
+    # Create cluster placeholder
     df['Cluster'] = -1
+    
+    # Fix nullable dtypes
+    for col in df.select_dtypes(include=['Int64']).columns:
+        df[col] = df[col].astype('float64')
     
     return df
 
@@ -165,7 +178,7 @@ def plot_confusion_matrix(cm, class_names):
 def main():
     
     # Sidebar
-    st.sidebar.image("https://via.placeholder.com/200x80/1f77b4/ffffff?text=ProcureAI", use_container_width=True)
+    st.sidebar.image("https://via.placeholder.com/200x80/1f77b4/ffffff?text=ProcureAI", width=200)
     st.sidebar.title("🎛️ Navigation")
     
     # Initialize session state
@@ -227,7 +240,7 @@ def main():
         """)
         return
     
-    df = st.session_state.data
+    df = st.session_state.data.copy()
     
     # Route to appropriate page
     if page == "🏠 Home & Overview":
@@ -273,7 +286,7 @@ def show_home(df):
     
     # Dataset preview
     st.subheader("📋 Dataset Preview")
-    st.dataframe(df.head(20), use_container_width=True)
+    st.dataframe(fix_dtypes_for_arrow(df.head(20)), width="stretch")
     
     # Dataset info
     col1, col2 = st.columns(2)
@@ -319,9 +332,14 @@ def show_classification(df):
     
     # Check if target exists
     if 'Is_Hot_Lead' not in df.columns:
-        # Create target variable
-        df['Is_Hot_Lead'] = ((df.get('Interest_Level', 3) >= 4) & 
-                            (df.get('Avg_Pain_Score', 3) >= 3.5)).astype(int)
+        # Create target variable safely
+        if 'Interest_Level' in df.columns and 'Avg_Pain_Score' in df.columns:
+            df['Is_Hot_Lead'] = ((df['Interest_Level'] >= 4) & 
+                                (df['Avg_Pain_Score'] >= 3.5)).astype(int)
+        else:
+            # Fallback: create dummy target
+            df['Is_Hot_Lead'] = 0
+            st.warning("⚠️ Creating dummy target variable. Upload data with Interest_Level and Avg_Pain_Score for better results.")
     
     st.info("🎯 **Objective:** Predict which customers are 'Hot Leads' (ready to buy or highly interested)")
     
@@ -331,17 +349,21 @@ def show_classification(df):
     
     # Select features
     numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
-    numeric_features = [f for f in numeric_features if f not in ['Is_Hot_Lead', 'Cluster']]
+    numeric_features = [f for f in numeric_features if f not in ['Is_Hot_Lead', 'Cluster', 
+                                                                  'Predicted_Hot_Lead', 'Hot_Lead_Probability']]
     
     default_features = [f for f in ['Avg_Pain_Score', 'Interest_Level', 'Purchase_Urgency',
                                     'Max_Monthly_WTP_AED', 'Digital_Maturity_Score', 
                                     'Tech_Openness', 'Annual_Procurement_Spend_AED'] 
                        if f in numeric_features]
     
+    if len(default_features) == 0:
+        default_features = numeric_features[:7] if len(numeric_features) >= 7 else numeric_features
+    
     selected_features = st.sidebar.multiselect(
         "Select Features:",
         numeric_features,
-        default=default_features[:7] if len(default_features) >= 7 else default_features
+        default=default_features
     )
     
     if len(selected_features) < 2:
@@ -355,7 +377,7 @@ def show_classification(df):
     y = df['Is_Hot_Lead']
     
     # Train-test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
     
     # Scale features
     scaler = StandardScaler()
@@ -377,8 +399,6 @@ def show_classification(df):
             model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
         else:
             n_estimators = st.sidebar.slider("Number of Estimators", 50, 200, 100)
-            model = GradientBoostingRegressor(n_estimators=n_estimators, random_state=42)
-            # Convert to classifier behavior
             model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
         
         model.fit(X_train_scaled, y_train)
@@ -391,22 +411,20 @@ def show_classification(df):
     
     col1, col2, col3, col4 = st.columns(4)
     
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-    
     with col1:
         acc = accuracy_score(y_test, y_pred)
         st.metric("🎯 Accuracy", f"{acc:.2%}")
     
     with col2:
-        prec = precision_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred, zero_division=0)
         st.metric("✅ Precision", f"{prec:.2%}")
     
     with col3:
-        rec = recall_score(y_test, y_pred)
+        rec = recall_score(y_test, y_pred, zero_division=0)
         st.metric("🔍 Recall", f"{rec:.2%}")
     
     with col4:
-        f1 = f1_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
         st.metric("📈 F1-Score", f"{f1:.2%}")
     
     # Visualizations
@@ -461,9 +479,11 @@ def show_classification(df):
     df['Hot_Lead_Probability'] = model.predict_proba(X_all_scaled)[:, 1]
     
     # Show predictions
-    pred_df = df[['Industry', 'Employees', 'Max_Monthly_WTP_AED', 'Interest_Level', 
-                  'Predicted_Hot_Lead', 'Hot_Lead_Probability']].head(20)
-    st.dataframe(pred_df, use_container_width=True)
+    display_cols = ['Industry', 'Employees', 'Interest_Level', 'Predicted_Hot_Lead', 'Hot_Lead_Probability']
+    display_cols = [c for c in display_cols if c in df.columns]
+    pred_df = df[display_cols].head(20)
+    
+    st.dataframe(fix_dtypes_for_arrow(pred_df), width="stretch")
     
     # Download predictions
     st.markdown(create_download_link(df, "classification_predictions.csv", 
@@ -484,17 +504,21 @@ def show_clustering(df):
     
     # Feature selection
     numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
-    numeric_features = [f for f in numeric_features if f not in ['Cluster', 'Is_Hot_Lead']]
+    numeric_features = [f for f in numeric_features if f not in ['Cluster', 'Is_Hot_Lead', 
+                                                                  'Predicted_Hot_Lead', 'Hot_Lead_Probability']]
     
     default_features = [f for f in ['Annual_Procurement_Spend_AED', 'Max_Monthly_WTP_AED',
                                     'Avg_Pain_Score', 'Avg_Feature_Value', 'Interest_Level',
                                     'Digital_Maturity_Score', 'Employees'] 
                        if f in numeric_features]
     
+    if len(default_features) == 0:
+        default_features = numeric_features[:7] if len(numeric_features) >= 7 else numeric_features
+    
     selected_features = st.sidebar.multiselect(
         "Select Features for Clustering:",
         numeric_features,
-        default=default_features[:7] if len(default_features) >= 7 else default_features
+        default=default_features
     )
     
     if len(selected_features) < 2:
@@ -593,8 +617,7 @@ def show_clustering(df):
                                             key=f"cluster_{i}")
     
     # Calculate profiles
-    profile_features = selected_features + ['Max_Monthly_WTP_AED', 'Interest_Level'] if 'Max_Monthly_WTP_AED' in df.columns else selected_features
-    profile_features = [f for f in profile_features if f in df.columns]
+    profile_features = [f for f in selected_features + ['Interest_Level'] if f in df.columns]
     
     cluster_profiles = df.groupby('Cluster')[profile_features].mean().round(2)
     cluster_profiles['Count'] = df['Cluster'].value_counts().sort_index()
@@ -603,7 +626,7 @@ def show_clustering(df):
     # Rename clusters
     cluster_profiles.index = [persona_names.get(i, f"Cluster {i}") for i in cluster_profiles.index]
     
-    st.dataframe(cluster_profiles, use_container_width=True)
+    st.dataframe(fix_dtypes_for_arrow(cluster_profiles), width="stretch")
     
     # Update dataframe with persona names
     df['Persona'] = df['Cluster'].map(persona_names)
@@ -648,7 +671,7 @@ def show_association_rules(df):
     
     # Identify binary columns
     for col in df.columns:
-        if df[col].nunique() == 2 and set(df[col].unique()).issubset({0, 1, True, False}):
+        if df[col].nunique() <= 2 and set(df[col].dropna().unique()).issubset({0, 1, True, False, 0.0, 1.0}):
             binary_cols.append(col)
     
     # Convert high-value features to binary
@@ -664,12 +687,13 @@ def show_association_rules(df):
     
     if len(binary_cols) < 3:
         st.warning("⚠️ Not enough binary features for association rule mining. Need at least 3 binary columns.")
+        st.info("💡 Try uploading data with more binary columns or categorical variables.")
         return
     
     st.write(f"📊 Found {len(binary_cols)} binary features for analysis")
     
     # Prepare data for Apriori
-    apriori_data = df[binary_cols].copy()
+    apriori_data = df[binary_cols].copy().fillna(0).astype(int)
     
     # Run Apriori
     with st.spinner("🔄 Mining association rules..."):
@@ -724,7 +748,7 @@ def show_association_rules(df):
     display_rules['Confidence'] = display_rules['Confidence'].apply(lambda x: f"{x:.2%}")
     display_rules['Lift'] = display_rules['Lift'].apply(lambda x: f"{x:.2f}")
     
-    st.dataframe(display_rules, use_container_width=True)
+    st.dataframe(fix_dtypes_for_arrow(display_rules), width="stretch")
     
     # Visualizations
     st.markdown("---")
@@ -793,6 +817,7 @@ def show_regression(df):
     # Check if target exists
     if 'Max_Monthly_WTP_AED' not in df.columns:
         st.error("❌ Target variable 'Max_Monthly_WTP_AED' not found in dataset")
+        st.info("💡 Please upload data with a 'Max_Monthly_WTP_AED' column or use synthetic data.")
         return
     
     st.info("🎯 **Objective:** Predict customer's maximum willingness to pay (WTP) for pricing optimization")
@@ -804,17 +829,21 @@ def show_regression(df):
     # Feature selection
     numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
     numeric_features = [f for f in numeric_features if f not in ['Max_Monthly_WTP_AED', 'Cluster', 
-                                                                  'Predicted_Hot_Lead', 'Hot_Lead_Probability']]
+                                                                  'Predicted_Hot_Lead', 'Hot_Lead_Probability',
+                                                                  'Predicted_WTP_AED', 'Prediction_Error_AED']]
     
     default_features = [f for f in ['Annual_Procurement_Spend_AED', 'Avg_Pain_Score', 
                                     'Interest_Level', 'Purchase_Urgency', 'Digital_Maturity_Score',
                                     'Avg_Feature_Value', 'Employees', 'Annual_Revenue_Million_AED'] 
                        if f in numeric_features]
     
+    if len(default_features) == 0:
+        default_features = numeric_features[:8] if len(numeric_features) >= 8 else numeric_features
+    
     selected_features = st.sidebar.multiselect(
         "Select Features:",
         numeric_features,
-        default=default_features[:8] if len(default_features) >= 8 else default_features
+        default=default_features
     )
     
     if len(selected_features) < 2:
@@ -843,7 +872,6 @@ def show_regression(df):
     # Train model
     with st.spinner("🔄 Training model..."):
         if model_choice == "Linear Regression":
-            from sklearn.linear_model import LinearRegression
             model = LinearRegression()
         elif model_choice == "Ridge Regression":
             alpha = st.sidebar.slider("Regularization (Alpha)", 0.1, 100.0, 10.0)
@@ -952,7 +980,7 @@ def show_regression(df):
         coef_df = pd.DataFrame({
             'Feature': selected_features,
             'Coefficient': model.coef_
-        }).sort_values('Coefficient', ascending=False)
+        }).sort_values('Coefficient', key=abs, ascending=False)
         
         fig = px.bar(coef_df, x='Coefficient', y='Feature', orientation='h',
                     title="Feature Coefficients",
@@ -966,14 +994,14 @@ def show_regression(df):
     
     X_all_scaled = scaler.transform(df[selected_features].fillna(df[selected_features].median()))
     df['Predicted_WTP_AED'] = model.predict(X_all_scaled)
-    df['Prediction_Error_AED'] = test_mae  # Use test MAE as estimate
+    df['Prediction_Error_AED'] = test_mae
     
     # Show predictions
     pred_cols = ['Industry', 'Employees', 'Annual_Procurement_Spend_AED', 
                 'Max_Monthly_WTP_AED', 'Predicted_WTP_AED']
     pred_cols = [c for c in pred_cols if c in df.columns]
     
-    st.dataframe(df[pred_cols].head(20), use_container_width=True)
+    st.dataframe(fix_dtypes_for_arrow(df[pred_cols].head(20)), width="stretch")
     
     # Download predictions
     st.markdown(create_download_link(df, "wtp_predictions.csv", 
@@ -991,6 +1019,26 @@ def show_dynamic_pricing(df):
     # Check if predictions exist
     if 'Predicted_WTP_AED' not in df.columns:
         st.warning("⚠️ Please run Regression analysis first to generate WTP predictions")
+        
+        if st.button("🔮 Generate Predictions Now"):
+            # Quick prediction using simple model
+            numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
+            numeric_features = [f for f in numeric_features if f not in ['Max_Monthly_WTP_AED', 'Cluster']]
+            
+            if 'Max_Monthly_WTP_AED' in df.columns and len(numeric_features) >= 3:
+                X = df[numeric_features[:5]].fillna(df[numeric_features[:5]].median())
+                y = df['Max_Monthly_WTP_AED']
+                
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(X)
+                
+                model = RandomForestRegressor(n_estimators=50, random_state=42)
+                model.fit(X_scaled, y)
+                
+                df['Predicted_WTP_AED'] = model.predict(X_scaled)
+                st.success("✅ Predictions generated! Refresh the page.")
+            else:
+                st.error("❌ Cannot generate predictions. Missing required columns.")
         return
     
     # Pricing tiers configuration
@@ -1000,14 +1048,15 @@ def show_dynamic_pricing(df):
     tier_names = ['Starter', 'Growth', 'Professional', 'Enterprise', 'Enterprise Plus']
     tier_prices = {}
     
+    default_prices = {
+        'Starter': 999,
+        'Growth': 2499,
+        'Professional': 4999,
+        'Enterprise': 7999,
+        'Enterprise Plus': 12999
+    }
+    
     for tier in tier_names:
-        default_prices = {
-            'Starter': 999,
-            'Growth': 2499,
-            'Professional': 4999,
-            'Enterprise': 7999,
-            'Enterprise Plus': 12999
-        }
         tier_prices[tier] = st.sidebar.number_input(
             f"{tier} Price (AED/month):",
             min_value=500,
@@ -1119,7 +1168,7 @@ def show_dynamic_pricing(df):
                             'Avg_WTP', 'Avg_Price_WTP_Ratio', 'Avg_Discount']
     tier_analysis = tier_analysis.reindex(tier_names, fill_value=0)
     
-    st.dataframe(tier_analysis, use_container_width=True)
+    st.dataframe(fix_dtypes_for_arrow(tier_analysis), width="stretch")
     
     # Price optimization visualization
     st.markdown("---")
@@ -1174,7 +1223,7 @@ def show_dynamic_pricing(df):
     
     segment_summary.columns = ['Avg_Value_Score', 'Customer_Count', 'Total_Revenue']
     
-    st.dataframe(segment_summary, use_container_width=True)
+    st.dataframe(fix_dtypes_for_arrow(segment_summary), width="stretch")
     
     # Sample recommendations
     st.markdown("---")
@@ -1185,7 +1234,7 @@ def show_dynamic_pricing(df):
                    'Annual_Price_Discounted', 'Priority_Segment']
     display_cols = [c for c in display_cols if c in df.columns]
     
-    st.dataframe(df[display_cols].head(20), use_container_width=True)
+    st.dataframe(fix_dtypes_for_arrow(df[display_cols].head(20)), width="stretch")
     
     # Download full recommendations
     st.markdown("---")
