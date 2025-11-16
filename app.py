@@ -112,7 +112,7 @@ def load_default_data():
         return generate_synthetic_data()
 
 def generate_synthetic_data(n=600):
-    """Generate synthetic procurement data"""
+    """Generate synthetic procurement data with meaningful relationship to WTP"""
     np.random.seed(42)
 
     data = {
@@ -146,10 +146,9 @@ def generate_synthetic_data(n=600):
         'Values_Risk_Assessment': np.random.randint(1, 6, n),
         'Values_Compliance': np.random.randint(1, 6, n),
 
-        # Intent & Budget
+        # Intent & Budget (excluding WTP; computed below)
         'Interest_Level': np.random.randint(1, 6, n),
         'Purchase_Urgency': np.random.randint(1, 6, n),
-        'Max_Monthly_WTP_AED': np.random.uniform(500, 15000, n),
         'Current_Software_Budget_Annual_AED': np.random.uniform(5000, 500000, n),
     }
 
@@ -158,6 +157,18 @@ def generate_synthetic_data(n=600):
     # Derived features
     df['Avg_Pain_Score'] = df[['Pain_Manual_RFQ', 'Pain_Vendor_Risk', 'Pain_Compliance']].mean(axis=1)
     df['Avg_Feature_Value'] = df[['Values_Automation', 'Values_Risk_Assessment', 'Values_Compliance']].mean(axis=1)
+
+    # Structured Max_Monthly_WTP_AED (signal + noise)
+    base_wtp = (
+        0.00008 * df['Annual_Procurement_Spend_AED'] / 12 +   # higher spend → higher WTP
+        150  * df['Interest_Level'] +                         # interest level
+        120  * df['Purchase_Urgency'] +                       # urgency
+        100  * df['Digital_Maturity_Score'] +                 # digital maturity
+        80   * df['Avg_Pain_Score'] +                         # pain score
+        np.random.normal(0, 400, size=n)                      # noise
+    )
+
+    df['Max_Monthly_WTP_AED'] = np.clip(base_wtp, 500, 15000)
 
     # Target for classification
     df['Is_Hot_Lead'] = ((df['Interest_Level'] >= 4) & (df['Avg_Pain_Score'] >= 3.5)).astype(int)
@@ -527,7 +538,7 @@ def show_classification(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 3: CLUSTERING & SEGMENTATION (FIXED)
+# PAGE 3: CLUSTERING & SEGMENTATION
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_clustering(df):
@@ -735,7 +746,7 @@ def show_clustering(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 4: ASSOCIATION RULE MINING (FIXED)
+# PAGE 4: ASSOCIATION RULE MINING
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_association_rules(df):
@@ -913,7 +924,7 @@ def show_association_rules(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 5: REGRESSION & PRICING (PERSISTS PREDICTIONS)
+# PAGE 5: REGRESSION & PRICING
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_regression(df):
@@ -1128,7 +1139,7 @@ def show_regression(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 6: DYNAMIC PRICING ENGINE (USES PREDICTIONS)
+# PAGE 6: DYNAMIC PRICING ENGINE
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_dynamic_pricing(df):
