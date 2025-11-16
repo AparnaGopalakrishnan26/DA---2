@@ -512,6 +512,9 @@ def show_classification(df):
     df['Predicted_Hot_Lead'] = model.predict(X_all_scaled)
     df['Hot_Lead_Probability'] = model.predict_proba(X_all_scaled)[:, 1]
 
+    # persist back
+    st.session_state.data = df.copy()
+
     display_cols = ['Industry', 'Employees', 'Interest_Level', 'Predicted_Hot_Lead', 'Hot_Lead_Probability']
     display_cols = [c for c in display_cols if c in df.columns]
     pred_df = df[display_cols].head(20)
@@ -524,7 +527,7 @@ def show_classification(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 3: CLUSTERING & SEGMENTATION (UPDATED)
+# PAGE 3: CLUSTERING & SEGMENTATION (FIXED)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_clustering(df):
@@ -701,6 +704,9 @@ def show_clustering(df):
     # Update dataframe with persona names
     df['Persona'] = df['Cluster'].map(persona_names)
 
+    # Persist cluster assignments
+    st.session_state.data = df.copy()
+
     # Detailed profile comparison
     st.markdown("---")
     st.subheader("📊 Detailed Cluster Comparison")
@@ -729,7 +735,7 @@ def show_clustering(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 4: ASSOCIATION RULE MINING (UPDATED)
+# PAGE 4: ASSOCIATION RULE MINING (FIXED)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_association_rules(df):
@@ -907,7 +913,7 @@ def show_association_rules(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 5: REGRESSION & PRICING
+# PAGE 5: REGRESSION & PRICING (PERSISTS PREDICTIONS)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_regression(df):
@@ -1097,12 +1103,16 @@ def show_regression(df):
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
 
+    # 🔮 Generate predictions for ALL rows
     st.markdown("---")
     st.subheader("🔮 Generate Predictions")
 
     X_all_scaled = scaler.transform(df[selected_features].fillna(df[selected_features].median()))
     df['Predicted_WTP_AED'] = model.predict(X_all_scaled)
     df['Prediction_Error_AED'] = test_mae
+
+    # ✅ Persist predictions into session state so Dynamic Pricing can see them
+    st.session_state.data = df.copy()
 
     pred_cols = [
         'Industry', 'Employees', 'Annual_Procurement_Spend_AED',
@@ -1118,7 +1128,7 @@ def show_regression(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 6: DYNAMIC PRICING ENGINE
+# PAGE 6: DYNAMIC PRICING ENGINE (USES PREDICTIONS)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_dynamic_pricing(df):
@@ -1126,10 +1136,12 @@ def show_dynamic_pricing(df):
 
     st.info("🎯 **Objective:** Generate personalized pricing recommendations based on predicted WTP and customer profile")
 
+    # If regression wasn't run yet
     if 'Predicted_WTP_AED' not in df.columns:
         st.warning("⚠️ Please run Regression analysis first to generate WTP predictions")
 
         if st.button("🔮 Generate Predictions Now"):
+            # Quick prediction using simple model
             numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
             numeric_features = [
                 f for f in numeric_features
@@ -1147,7 +1159,11 @@ def show_dynamic_pricing(df):
                 model.fit(X_scaled, y)
 
                 df['Predicted_WTP_AED'] = model.predict(X_scaled)
-                st.success("✅ Predictions generated! Refresh the page.")
+
+                # ✅ Persist into session_state so rest of the app sees it
+                st.session_state.data = df.copy()
+
+                st.success("✅ Predictions generated! Now reopen the Dynamic Pricing tab.")
             else:
                 st.error("❌ Cannot generate predictions. Missing required columns.")
         return
@@ -1208,6 +1224,9 @@ def show_dynamic_pricing(df):
     df['Annual_Price_Full'] = df['Recommended_Price'] * 12
     df['Annual_Price_Discounted'] = (df['Annual_Price_Full'] * (1 - annual_discount / 100)).astype(int)
     df['Annual_Savings'] = df['Annual_Price_Full'] - df['Annual_Price_Discounted']
+
+    # persist back
+    st.session_state.data = df.copy()
 
     st.subheader("📊 Pricing Overview")
 
