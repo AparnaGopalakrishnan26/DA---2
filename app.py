@@ -88,8 +88,7 @@ def fix_dtypes_for_arrow(df):
     for col in df.columns:
         col_data = df[col]
 
-        # If this selection returns a DataFrame (e.g., MultiIndex),
-        # skip it – Arrow will handle it or it’s not needed for type fix.
+        # If selection returns a DataFrame (e.g., MultiIndex), skip
         if isinstance(col_data, pd.DataFrame):
             continue
 
@@ -730,7 +729,7 @@ def show_clustering(df):
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 4: ASSOCIATION RULE MINING
+# PAGE 4: ASSOCIATION RULE MINING (UPDATED)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_association_rules(df):
@@ -789,6 +788,7 @@ def show_association_rules(df):
                 st.warning("⚠️ No rules found meeting criteria. Try lowering the thresholds.")
                 return
 
+            # Sort by lift
             rules = rules.sort_values('lift', ascending=False)
             st.success(f"✅ Found {len(rules)} association rules!")
 
@@ -796,6 +796,16 @@ def show_association_rules(df):
             st.error(f"❌ Error in association rule mining: {str(e)}")
             return
 
+    # Create string-safe columns for visualization (avoid frozenset serialization issues)
+    rules_viz = rules.copy()
+    rules_viz["antecedents_str"] = rules_viz["antecedents"].apply(
+        lambda x: ", ".join(sorted(list(x)))
+    )
+    rules_viz["consequents_str"] = rules_viz["consequents"].apply(
+        lambda x: ", ".join(sorted(list(x)))
+    )
+
+    # Display metrics
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -807,6 +817,7 @@ def show_association_rules(df):
     with col3:
         st.metric("🚀 Avg Lift", f"{rules['lift'].mean():.2f}")
 
+    # Top Rules
     st.markdown("---")
     st.subheader(f"🏆 Top {top_n_rules} Association Rules")
 
@@ -823,14 +834,19 @@ def show_association_rules(df):
 
     st.dataframe(fix_dtypes_for_arrow(display_rules), width="stretch")
 
+    # Visualizations
     st.markdown("---")
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("📊 Support vs Confidence")
         fig = px.scatter(
-            rules, x='support', y='confidence', size='lift',
-            color='lift', hover_data=['antecedents', 'consequents'],
+            rules_viz,
+            x='support',
+            y='confidence',
+            size='lift',
+            color='lift',
+            hover_data=['antecedents_str', 'consequents_str'],
             title="Association Rules: Support vs Confidence",
             color_continuous_scale='Viridis'
         )
@@ -840,13 +856,16 @@ def show_association_rules(df):
     with col2:
         st.subheader("📈 Lift Distribution")
         fig = px.histogram(
-            rules, x='lift', nbins=30,
+            rules,
+            x='lift',
+            nbins=30,
             title="Distribution of Lift Values",
             color_discrete_sequence=['#1f77b4']
         )
         fig.update_layout(showlegend=False, height=400)
         st.plotly_chart(fig, use_container_width=True)
 
+    # Detailed rule interpretation
     st.markdown("---")
     st.subheader("🔍 Detailed Rule Interpretation")
 
@@ -876,6 +895,7 @@ def show_association_rules(df):
     - This combination is {selected_rule['lift']:.1f}x more likely than random chance.
     """)
 
+    # Download rules
     st.markdown("---")
     rules_export = rules.copy()
     rules_export['antecedents'] = rules_export['antecedents'].apply(lambda x: ', '.join(list(x)))
