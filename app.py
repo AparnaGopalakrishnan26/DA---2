@@ -74,16 +74,31 @@ st.markdown("""
 # ═══════════════════════════════════════════════════════════════════════════
 
 def fix_dtypes_for_arrow(df):
-    """Fix pandas nullable dtypes for Arrow compatibility"""
+    """Fix pandas nullable dtypes for Arrow compatibility.
+
+    Safely handles DataFrames with MultiIndex columns or cases where df[col]
+    returns another DataFrame instead of a Series.
+    """
     if df is None or df.empty:
         return df
     df = df.copy()
+
     for col in df.columns:
-        if hasattr(df[col].dtype, 'name'):
-            if df[col].dtype.name == 'Int64':
-                df[col] = df[col].astype('float64')
-            elif df[col].dtype.name == 'boolean':
-                df[col] = df[col].astype('bool')
+        col_data = df[col]
+
+        # If this selection returns a DataFrame (e.g., MultiIndex),
+        # skip it – Arrow will handle it or it’s not needed for type fix.
+        if isinstance(col_data, pd.DataFrame):
+            continue
+
+        dtype = getattr(col_data, "dtype", None)
+        dtype_name = getattr(dtype, "name", None)
+
+        if dtype_name == "Int64":
+            df[col] = col_data.astype("float64")
+        elif dtype_name == "boolean":
+            df[col] = col_data.astype("bool")
+
     return df
 
 @st.cache_data
