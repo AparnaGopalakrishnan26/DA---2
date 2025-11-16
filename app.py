@@ -2,6 +2,7 @@
 ═══════════════════════════════════════════════════════════════════════════
 PROCUREAI UAE - COMPREHENSIVE ANALYTICS DASHBOARD
 Machine Learning Suite for Customer Segmentation & Dynamic Pricing
+Version: 2.0 (All Fixes Applied)
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -74,22 +75,94 @@ st.markdown("""
 # ═══════════════════════════════════════════════════════════════════════════
 
 def fix_dtypes_for_arrow(df):
-    """Fix pandas nullable dtypes for Arrow compatibility"""
-    if df is None or df.empty:
+    """
+    Fix pandas nullable dtypes for Arrow compatibility
+    Handles various edge cases including grouped data, nullable types, and special objects
+    """
+    # Handle None or empty dataframes
+    if df is None:
         return df
+    
+    # Handle empty dataframes
+    if isinstance(df, pd.DataFrame) and len(df) == 0:
+        return df
+    
+    # Handle Series
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    
+    # Create a copy to avoid modifying original
     df = df.copy()
+    
+    # Reset index if it's not a default RangeIndex
+    # This handles grouped/aggregated dataframes
+    if not isinstance(df.index, pd.RangeIndex):
+        df = df.reset_index()
+    
+    # Fix each column's dtype
     for col in df.columns:
-        if hasattr(df[col].dtype, 'name'):
-            if df[col].dtype.name == 'Int64':
+        try:
+            # Skip if column doesn't exist or is None
+            if col not in df.columns:
+                continue
+            
+            # Get the column
+            series = df[col]
+            
+            # Check if it has dtype attribute
+            if not hasattr(series, 'dtype'):
+                continue
+            
+            # Get dtype
+            dtype = series.dtype
+            
+            # Check if dtype has name attribute
+            if not hasattr(dtype, 'name'):
+                continue
+            
+            dtype_name = dtype.name
+            
+            # Convert nullable Int64 to float64 (Arrow doesn't support nullable int well)
+            if dtype_name == 'Int64':
                 df[col] = df[col].astype('float64')
-            elif df[col].dtype.name == 'boolean':
-                df[col] = df[col].astype('bool')
+            
+            # Convert nullable boolean to standard bool
+            elif dtype_name == 'boolean':
+                df[col] = df[col].fillna(False).astype('bool')
+            
+            # Handle object dtype that might contain special types
+            elif dtype_name == 'object':
+                # Check for sets/frozensets (from association rules)
+                first_non_null = series.dropna()
+                if len(first_non_null) > 0:
+                    first_val = first_non_null.iloc[0]
+                    
+                    # Convert sets/frozensets to strings
+                    if isinstance(first_val, (set, frozenset)):
+                        df[col] = series.apply(
+                            lambda x: ', '.join(sorted(list(x))) if isinstance(x, (set, frozenset)) else str(x)
+                        )
+                    
+                    # Handle lists
+                    elif isinstance(first_val, list):
+                        df[col] = series.apply(
+                            lambda x: ', '.join(map(str, x)) if isinstance(x, list) else str(x)
+                        )
+            
+            # Handle category dtype
+            elif dtype_name == 'category':
+                df[col] = df[col].astype('object')
+        
+        except Exception as e:
+            # If any conversion fails, skip this column
+            # Better to show some data than crash
+            continue
+    
     return df
 
 @st.cache_data
 def load_default_data():
     """Load synthetic dataset"""
-    # Try to load from GitHub or local
     try:
         df = pd.read_csv("ProcureAI_Survey_Data.csv")
         return df
@@ -149,8 +222,12 @@ def generate_synthetic_data(n=600):
     df['Cluster'] = -1
     
     # Fix nullable dtypes
-    for col in df.select_dtypes(include=['Int64']).columns:
-        df[col] = df[col].astype('float64')
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            continue
+        # Convert all numeric to standard float/int
+        if df[col].dtype in ['Int64', 'Float64']:
+            df[col] = df[col].astype('float64')
     
     return df
 
@@ -375,6 +452,11 @@ def show_classification(df):
     # Prepare data
     X = df[selected_features].fillna(df[selected_features].median())
     y = df['Is_Hot_Lead']
+    
+    # Check if we have both classes
+    if len(y.unique()) < 2:
+        st.error("❌ Target variable has only one class. Cannot train classifier.")
+        return
     
     # Train-test split
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
@@ -625,8 +707,12 @@ def show_clustering(df):
     
     # Rename clusters
     cluster_profiles.index = [persona_names.get(i, f"Cluster {i}") for i in cluster_profiles.index]
+    cluster_profiles.index.name = 'Cluster_Name'
     
-    st.dataframe(fix_dtypes_for_arrow(cluster_profiles), width="stretch")
+    # FIXED: Reset index before displaying
+    cluster_profiles_display = cluster_profiles.reset_index()
+    
+    st.dataframe(fix_dtypes_for_arrow(cluster_profiles_display), width="stretch")
     
     # Update dataframe with persona names
     df['Persona'] = df['Cluster'].map(persona_names)
@@ -1037,6 +1123,7 @@ def show_dynamic_pricing(df):
                 
                 df['Predicted_WTP_AED'] = model.predict(X_scaled)
                 st.success("✅ Predictions generated! Refresh the page.")
+                st.rerun()
             else:
                 st.error("❌ Cannot generate predictions. Missing required columns.")
         return
@@ -1121,130 +1208,4 @@ def show_dynamic_pricing(df):
         st.metric("📊 Avg Price/Customer", f"AED {avg_price:,.0f}")
     
     with col4:
-        avg_ratio = df['Price_to_WTP_Ratio'].mean()
-        st.metric("🎯 Avg Price/WTP Ratio", f"{avg_ratio:.2f}")
-    
-    # Tier distribution
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📊 Customer Distribution by Tier")
-        
-        tier_counts = df['Recommended_Tier'].value_counts()
-        tier_counts = tier_counts.reindex(tier_names, fill_value=0)
-        
-        fig = px.pie(values=tier_counts.values, names=tier_counts.index,
-                    title="Customers by Pricing Tier",
-                    color_discrete_sequence=px.colors.sequential.Blues)
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        st.subheader("💰 Revenue by Tier")
-        
-        tier_revenue = df.groupby('Recommended_Tier')['Recommended_Price'].sum()
-        tier_revenue = tier_revenue.reindex(tier_names, fill_value=0)
-        
-        fig = px.bar(x=tier_revenue.index, y=tier_revenue.values,
-                    title="Monthly Revenue by Tier",
-                    color=tier_revenue.values,
-                    color_continuous_scale='Greens',
-                    labels={'x': 'Tier', 'y': 'Revenue (AED)'})
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-    
-    # Detailed tier analysis
-    st.markdown("---")
-    st.subheader("📋 Detailed Tier Analysis")
-    
-    tier_analysis = df.groupby('Recommended_Tier').agg({
-        'Recommended_Price': ['count', 'mean', 'sum'],
-        'Predicted_WTP_AED': 'mean',
-        'Price_to_WTP_Ratio': 'mean',
-        'Discount_Percent': 'mean'
-    }).round(0)
-    
-    tier_analysis.columns = ['Customer_Count', 'Avg_Price', 'Total_Revenue', 
-                            'Avg_WTP', 'Avg_Price_WTP_Ratio', 'Avg_Discount']
-    tier_analysis = tier_analysis.reindex(tier_names, fill_value=0)
-    
-    st.dataframe(fix_dtypes_for_arrow(tier_analysis), width="stretch")
-    
-    # Price optimization visualization
-    st.markdown("---")
-    st.subheader("🎯 Price Optimization Analysis")
-    
-    fig = px.scatter(df, x='Predicted_WTP_AED', y='Recommended_Price',
-                    color='Recommended_Tier',
-                    size='Annual_Procurement_Spend_AED' if 'Annual_Procurement_Spend_AED' in df.columns else None,
-                    hover_data=['Industry'] if 'Industry' in df.columns else None,
-                    title="Recommended Price vs Predicted WTP",
-                    color_discrete_sequence=px.colors.qualitative.Set3)
-    
-    # Add perfect pricing line
-    max_val = max(df['Predicted_WTP_AED'].max(), df['Recommended_Price'].max())
-    fig.add_trace(go.Scatter(x=[0, max_val], y=[0, max_val],
-                            mode='lines', name='Price = WTP',
-                            line=dict(color='red', dash='dash', width=2)))
-    
-    fig.update_layout(height=500)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Customer prioritization
-    st.markdown("---")
-    st.subheader("🎯 Customer Prioritization")
-    
-    # Calculate value score
-    df['Customer_Value_Score'] = (
-        df['Predicted_WTP_AED'] / 100 +
-        df.get('Interest_Level', 3) * 10 +
-        df.get('Is_Hot_Lead', 0) * 50
-    )
-    
-    # Segment customers
-    def priority_segment(row):
-        if row.get('Is_Hot_Lead', 0) == 1 and row['Predicted_WTP_AED'] >= 5000:
-            return 'A - High Value Hot Leads'
-        elif row.get('Is_Hot_Lead', 0) == 1:
-            return 'B - Hot Leads'
-        elif row.get('Interest_Level', 3) >= 4 and row['Predicted_WTP_AED'] >= 3000:
-            return 'C - High Intent'
-        elif row['Predicted_WTP_AED'] >= 5000:
-            return 'D - High Value'
-        else:
-            return 'E - Standard'
-    
-    df['Priority_Segment'] = df.apply(priority_segment, axis=1)
-    
-    segment_summary = df.groupby('Priority_Segment').agg({
-        'Customer_Value_Score': 'mean',
-        'Recommended_Price': ['count', 'sum']
-    }).round(0)
-    
-    segment_summary.columns = ['Avg_Value_Score', 'Customer_Count', 'Total_Revenue']
-    
-    st.dataframe(fix_dtypes_for_arrow(segment_summary), width="stretch")
-    
-    # Sample recommendations
-    st.markdown("---")
-    st.subheader("📋 Sample Pricing Recommendations")
-    
-    display_cols = ['Industry', 'Employees', 'Predicted_WTP_AED', 'Recommended_Tier',
-                   'List_Price', 'Discount_Percent', 'Recommended_Price', 
-                   'Annual_Price_Discounted', 'Priority_Segment']
-    display_cols = [c for c in display_cols if c in df.columns]
-    
-    st.dataframe(fix_dtypes_for_arrow(df[display_cols].head(20)), width="stretch")
-    
-    # Download full recommendations
-    st.markdown("---")
-    st.markdown(create_download_link(df, "dynamic_pricing_recommendations.csv", 
-                                    "📥 Download Complete Pricing Recommendations"), 
-               unsafe_allow_html=True)
-
-# ═══════════════════════════════════════════════════════════════════════════
-# RUN APPLICATION
-# ═══════════════════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    main()
+        avg_ratio = df['Price_to_WTP_
