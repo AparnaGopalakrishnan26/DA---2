@@ -1,8 +1,56 @@
+def fix_dtypes_for_arrow(df):
+    """
+    Fix pandas nullable dtypes for Arrow compatibility
+    Handles various edge cases including grouped data, nullable types, and special objects
+    """
+    # Handle None or empty dataframes
+    if df is None:
+        return df
+    
+    # Handle empty dataframes
+    if isinstance(df, pd.DataFrame) and len(df) == 0:
+        return df
+    
+    # Handle Series
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    
+    # Create a copy to avoid modifying original
+    df = df.copy()
+    
+    # Reset index if it's not a default RangeIndex
+    # This handles grouped/aggregated dataframes
+    if not isinstance(df.index, pd.RangeIndex):
+        df = df.reset_index()
+
+I'll focus on the key observation that the function is designed to handle grouped DataFrames by resetting the index, which should resolve the dtype access issue.
+
+The specific error suggests a column might be missing or transformed in a way that prevents dtype access. I'll investigate potential scenarios where a column might lose its standard DataFrame characteristics during processing.
+
+The error occurs when trying to access `.dtype` on a column, indicating the column might have been converted to a type that doesn't support this attribute. This could happen with complex transformations or when working with grouped or aggregated data.
+
+The index reset operation seems particularly suspicious. When converting a non-RangeIndex to a column, there's a risk of introducing unexpected column names or structures that break standard DataFrame assumptions. The conversion might create naming conflicts or introduce columns with non-standard types.
+
+The `__getattr__` error suggests something fundamental is wrong with how the column is being accessed or processed. Specifically, the dtype check is attempting to access an attribute on something that might not be a proper pandas Series, which triggers this low-level attribute resolution failure.
+
+The core problem appears to be a premature dtype access before verifying the column's basic structure. The code needs a more robust check to ensure the column represents a valid Series before attempting to examine its dtype characteristics.
+
+I'll need to restructure the type checking mechanism to add multiple layers of validation, ensuring each column can be safely processed without raising unexpected attribute errors. This involves creating explicit type guards and fallback mechanisms that gracefully handle different data scenarios.
+
+The proposed solution involves implementing comprehensive type checking that prevents premature attribute access and provides clear error handling pathways for unexpected data structures.
+
+I'll focus on creating a more defensive approach to dtype manipulation, with explicit checks that prevent potential runtime exceptions during DataFrame transformations.
+</details>
+# Fixed ProcureAI Dashboard Code
+
+I've identified and fixed the error in your clustering section. The issue was with how grouped DataFrames were being handled. Here's the corrected code:
+
+```python
 """
 ═══════════════════════════════════════════════════════════════════════════
 PROCUREAI UAE - COMPREHENSIVE ANALYTICS DASHBOARD
 Machine Learning Suite for Customer Segmentation & Dynamic Pricing
-Version: 2.0 (All Fixes Applied)
+Version: 2.1 (Clustering Error Fixed)
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -102,12 +150,16 @@ def fix_dtypes_for_arrow(df):
     # Fix each column's dtype
     for col in df.columns:
         try:
-            # Skip if column doesn't exist or is None
+            # Skip if column doesn't exist
             if col not in df.columns:
                 continue
             
-            # Get the column
+            # Get the column as Series
             series = df[col]
+            
+            # Skip if not a proper Series
+            if not isinstance(series, pd.Series):
+                continue
             
             # Check if it has dtype attribute
             if not hasattr(series, 'dtype'):
@@ -116,22 +168,19 @@ def fix_dtypes_for_arrow(df):
             # Get dtype
             dtype = series.dtype
             
-            # Check if dtype has name attribute
-            if not hasattr(dtype, 'name'):
-                continue
-            
-            dtype_name = dtype.name
+            # Handle different dtype scenarios
+            dtype_str = str(dtype)
             
             # Convert nullable Int64 to float64 (Arrow doesn't support nullable int well)
-            if dtype_name == 'Int64':
+            if dtype_str == 'Int64':
                 df[col] = df[col].astype('float64')
             
             # Convert nullable boolean to standard bool
-            elif dtype_name == 'boolean':
+            elif dtype_str == 'boolean':
                 df[col] = df[col].fillna(False).astype('bool')
             
             # Handle object dtype that might contain special types
-            elif dtype_name == 'object':
+            elif dtype_str == 'object':
                 # Check for sets/frozensets (from association rules)
                 first_non_null = series.dropna()
                 if len(first_non_null) > 0:
@@ -150,13 +199,16 @@ def fix_dtypes_for_arrow(df):
                         )
             
             # Handle category dtype
-            elif dtype_name == 'category':
+            elif dtype_str == 'category':
                 df[col] = df[col].astype('object')
         
         except Exception as e:
-            # If any conversion fails, skip this column
-            # Better to show some data than crash
-            continue
+            # If any conversion fails, try to convert to string as last resort
+            try:
+                df[col] = df[col].astype(str)
+            except:
+                # If even that fails, skip this column
+                pass
     
     return df
 
@@ -363,7 +415,7 @@ def show_home(df):
     
     # Dataset preview
     st.subheader("📋 Dataset Preview")
-    st.dataframe(fix_dtypes_for_arrow(df.head(20)), width="stretch")
+    st.dataframe(fix_dtypes_for_arrow(df.head(20)), use_container_width=True)
     
     # Dataset info
     col1, col2 = st.columns(2)
@@ -565,14 +617,14 @@ def show_classification(df):
     display_cols = [c for c in display_cols if c in df.columns]
     pred_df = df[display_cols].head(20)
     
-    st.dataframe(fix_dtypes_for_arrow(pred_df), width="stretch")
+    st.dataframe(fix_dtypes_for_arrow(pred_df), use_container_width=True)
     
     # Download predictions
     st.markdown(create_download_link(df, "classification_predictions.csv", 
                                     "📥 Download All Predictions"), unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAGE 3: CLUSTERING & SEGMENTATION
+# PAGE 3: CLUSTERING & SEGMENTATION - FIXED VERSION
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_clustering(df):
@@ -684,7 +736,7 @@ def show_clustering(df):
         fig.update_traces(marker=dict(size=8, opacity=0.7, line=dict(width=0.5, color='black')))
         st.plotly_chart(fig, use_container_width=True)
     
-    # Cluster Profiles
+    # Cluster Profiles - FIXED VERSION
     st.markdown("---")
     st.subheader("📋 Cluster Profiles")
     
@@ -701,18 +753,26 @@ def show_clustering(df):
     # Calculate profiles
     profile_features = [f for f in selected_features + ['Interest_Level'] if f in df.columns]
     
+    # Create cluster profiles with proper index handling
     cluster_profiles = df.groupby('Cluster')[profile_features].mean().round(2)
     cluster_profiles['Count'] = df['Cluster'].value_counts().sort_index()
     cluster_profiles['Percentage'] = (cluster_profiles['Count'] / len(df) * 100).round(1)
     
+    # CRITICAL FIX: Reset index BEFORE renaming and applying fix_dtypes_for_arrow
+    cluster_profiles_reset = cluster_profiles.reset_index()
+    
     # Rename clusters
-    cluster_profiles.index = [persona_names.get(i, f"Cluster {i}") for i in cluster_profiles.index]
-    cluster_profiles.index.name = 'Cluster_Name'
+    cluster_profiles_reset['Cluster_Name'] = cluster_profiles_reset['Cluster'].map(
+        lambda x: persona_names.get(x, f"Cluster {x}")
+    )
     
-    # FIXED: Reset index before displaying
-    cluster_profiles_display = cluster_profiles.reset_index()
+    # Reorder columns to put Cluster_Name first
+    cols_order = ['Cluster_Name', 'Cluster'] + [c for c in cluster_profiles_reset.columns 
+                                                  if c not in ['Cluster_Name', 'Cluster']]
+    cluster_profiles_display = cluster_profiles_reset[cols_order]
     
-    st.dataframe(fix_dtypes_for_arrow(cluster_profiles_display), width="stretch")
+    # Now apply fix_dtypes_for_arrow to the properly structured DataFrame
+    st.dataframe(fix_dtypes_for_arrow(cluster_profiles_display), use_container_width=True)
     
     # Update dataframe with persona names
     df['Persona'] = df['Cluster'].map(persona_names)
@@ -723,9 +783,14 @@ def show_clustering(df):
     
     selected_metric = st.selectbox("Select metric to compare:", profile_features)
     
-    fig = px.bar(cluster_profiles, y=selected_metric, 
+    # Create comparison chart
+    comparison_data = cluster_profiles_reset.copy()
+    comparison_data['Cluster_Label'] = comparison_data['Cluster'].apply(lambda x: persona_names.get(x, f"Cluster {x}"))
+    
+    fig = px.bar(comparison_data, x='Cluster_Label', y=selected_metric,
                 title=f"Comparison of {selected_metric} across Clusters",
-                color=selected_metric, color_continuous_scale='Blues')
+                color=selected_metric, color_continuous_scale='Blues',
+                labels={'Cluster_Label': 'Cluster'})
     fig.update_layout(showlegend=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
     
@@ -834,7 +899,10 @@ def show_association_rules(df):
     display_rules['Confidence'] = display_rules['Confidence'].apply(lambda x: f"{x:.2%}")
     display_rules['Lift'] = display_rules['Lift'].apply(lambda x: f"{x:.2f}")
     
-    st.dataframe(fix_dtypes_for_arrow(display_rules), width="stretch")
+    # Reset index before displaying
+    display_rules = display_rules.reset_index(drop=True)
+    
+    st.dataframe(fix_dtypes_for_arrow(display_rules), use_container_width=True)
     
     # Visualizations
     st.markdown("---")
@@ -1087,7 +1155,7 @@ def show_regression(df):
                 'Max_Monthly_WTP_AED', 'Predicted_WTP_AED']
     pred_cols = [c for c in pred_cols if c in df.columns]
     
-    st.dataframe(fix_dtypes_for_arrow(df[pred_cols].head(20)), width="stretch")
+    st.dataframe(fix_dtypes_for_arrow(df[pred_cols].head(20)), use_container_width=True)
     
     # Download predictions
     st.markdown(create_download_link(df, "wtp_predictions.csv", 
@@ -1122,6 +1190,7 @@ def show_dynamic_pricing(df):
                 model.fit(X_scaled, y)
                 
                 df['Predicted_WTP_AED'] = model.predict(X_scaled)
+                st.session_state.data = df
                 st.success("✅ Predictions generated! Refresh the page.")
                 st.rerun()
             else:
@@ -1208,4 +1277,88 @@ def show_dynamic_pricing(df):
         st.metric("📊 Avg Price/Customer", f"AED {avg_price:,.0f}")
     
     with col4:
-        avg_ratio = df['Price_to_WTP_
+        avg_ratio = df['Price_to_WTP_Ratio'].mean()
+        st.metric("📈 Avg Price/WTP Ratio", f"{avg_ratio:.2f}")
+    
+    # Tier Distribution
+    st.markdown("---")
+    st.subheader("📊 Pricing Tier Distribution")
+    
+    tier_dist = df['Recommended_Tier'].value_counts()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig = px.pie(values=tier_dist.values, names=tier_dist.index,
+                    title="Customer Distribution by Tier",
+                    color_discrete_sequence=px.colors.qualitative.Pastel)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        tier_revenue = df.groupby('Recommended_Tier')['Recommended_Price'].sum().sort_values(ascending=False)
+        
+        fig = px.bar(x=tier_revenue.index, y=tier_revenue.values,
+                    title="Monthly Revenue by Tier",
+                    labels={'x': 'Tier', 'y': 'Monthly Revenue (AED)'},
+                    color=tier_revenue.values, color_continuous_scale='Blues')
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Pricing Recommendations Table
+    st.markdown("---")
+    st.subheader("💼 Personalized Pricing Recommendations")
+    
+    display_cols = ['Industry', 'Employees', 'Predicted_WTP_AED', 'Recommended_Tier', 
+                   'List_Price', 'Discount_Percent', 'Recommended_Price', 
+                   'Annual_Price_Discounted', 'Annual_Savings']
+    display_cols = [c for c in display_cols if c in df.columns]
+    
+    pricing_df = df[display_cols].head(20).copy()
+    
+    st.dataframe(fix_dtypes_for_arrow(pricing_df), use_container_width=True)
+    
+    # Pricing Strategy Insights
+    st.markdown("---")
+    st.subheader("💡 Pricing Strategy Insights")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        ### 📊 Key Metrics:
+        - **Average WTP:** AED {:,.0f}
+        - **Average Recommended Price:** AED {:,.0f}
+        - **Pricing Efficiency:** {:.1f}%
+        - **Total Customers:** {:,}
+        """.format(
+            df['Predicted_WTP_AED'].mean(),
+            df['Recommended_Price'].mean(),
+            (df['Recommended_Price'].mean() / df['Predicted_WTP_AED'].mean()) * 100,
+            len(df)
+        ))
+    
+    with col2:
+        st.markdown("""
+        ### 🎯 Recommendations:
+        1. **Premium Tier Focus:** Target top {} customers with Enterprise+ tier
+        2. **Discount Strategy:** {} customers qualify for hot lead discount
+        3. **Annual Conversion:** Potential AED {:,.0f} in annual savings incentive
+        4. **Price Optimization:** Average {:.0f}% of WTP captured
+        """.format(
+            len(df[df['Recommended_Tier'] == 'Enterprise Plus']),
+            len(df[df['Discount_Percent'] > 0]),
+            df['Annual_Savings'].sum(),
+            df['Price_to_WTP_Ratio'].mean() * 100
+        ))
+    
+    # Download pricing recommendations
+    st.markdown("---")
+    st.markdown(create_download_link(df, "pricing_recommendations.csv", 
+                                    "📥 Download Complete Pricing Strategy"), unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RUN APPLICATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    main()
