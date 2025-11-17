@@ -116,10 +116,15 @@ def generate_synthetic_data(n=600):
     np.random.seed(42)
 
     data = {
+        # Unique identifier per company
+        'Company_ID': np.arange(1, n + 1),
+        'Company_Name': [f"Company_{i:03d}" for i in range(1, n + 1)],
+
         # Firmographics
         'Industry': np.random.choice(
             ['Construction', 'Manufacturing', 'Trading', 'Professional Services',
-             'Healthcare', 'Retail', 'Technology'], n
+             'Healthcare', 'Retail', 'Technology'],
+            size=n
         ),
         'Employees': np.random.randint(5, 1000, n),
         'Annual_Revenue_Million_AED': np.random.uniform(0.5, 200, n),
@@ -296,6 +301,19 @@ def main():
 def show_home(df):
     st.markdown("<h1 class='main-header'>🏠 Data Overview & Summary</h1>", unsafe_allow_html=True)
 
+    # 🏢 Company info (Shopora Pvt. Ltd.)
+    st.markdown("### 🏢 Company: **Shopora Pvt. Ltd.**")
+    st.markdown("""
+    **Company Overview:**  
+    Shopora Pvt. Ltd. is a mid-sized Indian e-commerce platform founded in 2018, offering fashion, electronics, 
+    and household products. It handles around 20,000 daily transactions and serves customers across multiple regions. 
+    Despite strong sales growth, the company struggles with customer retention, inefficient marketing spending, and 
+    inventory imbalances. Management now aims to leverage data analytics to enhance decision-making, improve customer 
+    experience, and ensure sustainable profitability.
+    """)
+
+    st.markdown("---")
+
     # Summary metrics
     col1, col2, col3, col4 = st.columns(4)
 
@@ -322,7 +340,12 @@ def show_home(df):
 
     # Dataset preview
     st.subheader("📋 Dataset Preview")
-    st.dataframe(fix_dtypes_for_arrow(df.head(20)), width="stretch")
+    # Show company identifiers prominently in preview if available
+    preview_cols = df.columns.tolist()
+    preferred_order = ['Company_ID', 'Company_Name', 'Industry', 'Employees']
+    ordered = [c for c in preferred_order if c in preview_cols] + \
+              [c for c in preview_cols if c not in preferred_order]
+    st.dataframe(fix_dtypes_for_arrow(df[ordered].head(20)), width="stretch")
 
     # Dataset info
     col1, col2 = st.columns(2)
@@ -445,7 +468,9 @@ def show_classification(df):
             model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
         else:
             n_estimators = st.sidebar.slider("Number of Estimators", 50, 200, 100)
-            model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+            # Use Gradient Boosting Classifier here instead of RF
+            from sklearn.ensemble import GradientBoostingClassifier
+            model = GradientBoostingClassifier(n_estimators=n_estimators, random_state=42)
 
         model.fit(X_train_scaled, y_train)
         y_pred = model.predict(X_test_scaled)
@@ -514,6 +539,25 @@ def show_classification(df):
         )
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
+    elif hasattr(model, 'coef_'):
+        coefs = model.coef_
+        # For binary logistic regression, shape is (1, n_features)
+        if isinstance(coefs, np.ndarray) and coefs.ndim > 1:
+            coefs = coefs[0]
+        importance_df = pd.DataFrame({
+            'Feature': selected_features,
+            'Importance': np.abs(coefs)
+        }).sort_values('Importance', ascending=False)
+
+        fig = px.bar(
+            importance_df, x='Importance', y='Feature', orientation='h',
+            title="Feature Importance (Absolute Coefficients)",
+            color='Importance', color_continuous_scale='Blues'
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Feature importance not available for the selected model.")
 
     # Predictions
     st.markdown("---")
@@ -526,7 +570,8 @@ def show_classification(df):
     # persist back
     st.session_state.data = df.copy()
 
-    display_cols = ['Industry', 'Employees', 'Interest_Level', 'Predicted_Hot_Lead', 'Hot_Lead_Probability']
+    display_cols = ['Company_Name', 'Industry', 'Employees', 'Interest_Level',
+                    'Predicted_Hot_Lead', 'Hot_Lead_Probability']
     display_cols = [c for c in display_cols if c in df.columns]
     pred_df = df[display_cols].head(20)
 
@@ -678,14 +723,31 @@ def show_clustering(df):
     st.markdown("---")
     st.subheader("📋 Cluster Profiles")
 
+    # Fixed segment legend table
+    segment_legend = {
+        0: "High-Value Digital Adopters",
+        1: "Tech-Ready but Low-Pain Enterprises",
+        2: "High-Intent but Low-Maturity Buyers",
+        3: "Traditional High-Spend Skeptics"
+    }
+
+    legend_df = pd.DataFrame({
+        "Cluster": [f"Cluster {i}" for i in segment_legend.keys()],
+        "Default Segment Name": list(segment_legend.values())
+    })
+
+    st.markdown("#### 🧩 Segment Legend (Default Interpretation)")
+    st.table(legend_df)
+
     persona_names = {}
     cols = st.columns(n_clusters)
 
     for i, col in enumerate(cols):
         with col:
+            default_name = segment_legend.get(i, f"Segment {i}")
             persona_names[i] = st.text_input(
                 f"Cluster {i} Name:",
-                value=f"Segment {i}",
+                value=default_name,
                 key=f"cluster_{i}"
             )
 
@@ -1101,10 +1163,13 @@ def show_regression(df):
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
     elif hasattr(model, 'coef_'):
+        coefs = model.coef_
+        if isinstance(coefs, np.ndarray) and coefs.ndim > 1:
+            coefs = coefs[0]
         coef_df = pd.DataFrame({
             'Feature': selected_features,
-            'Coefficient': model.coef_
-        }).sort_values('Coefficient', key=abs, ascending=False)
+            'Coefficient': coefs
+        }).sort_values('Coefficient', key=np.abs, ascending=False)
 
         fig = px.bar(
             coef_df, x='Coefficient', y='Feature', orientation='h',
@@ -1126,7 +1191,7 @@ def show_regression(df):
     st.session_state.data = df.copy()
 
     pred_cols = [
-        'Industry', 'Employees', 'Annual_Procurement_Spend_AED',
+        'Company_Name', 'Industry', 'Employees', 'Annual_Procurement_Spend_AED',
         'Max_Monthly_WTP_AED', 'Predicted_WTP_AED'
     ]
     pred_cols = [c for c in pred_cols if c in df.columns]
@@ -1319,7 +1384,7 @@ def show_dynamic_pricing(df):
         y='Recommended_Price',
         color='Recommended_Tier',
         size='Annual_Procurement_Spend_AED' if 'Annual_Procurement_Spend_AED' in df.columns else None,
-        hover_data=['Industry'] if 'Industry' in df.columns else None,
+        hover_data=['Company_Name', 'Industry'] if 'Company_Name' in df.columns and 'Industry' in df.columns else None,
         title="Recommended Price vs Predicted WTP",
         color_discrete_sequence=px.colors.qualitative.Set3
     )
@@ -1372,7 +1437,7 @@ def show_dynamic_pricing(df):
     st.subheader("📋 Sample Pricing Recommendations")
 
     display_cols = [
-        'Industry', 'Employees', 'Predicted_WTP_AED', 'Recommended_Tier',
+        'Company_Name', 'Industry', 'Employees', 'Predicted_WTP_AED', 'Recommended_Tier',
         'List_Price', 'Discount_Percent', 'Recommended_Price',
         'Annual_Price_Discounted', 'Priority_Segment'
     ]
