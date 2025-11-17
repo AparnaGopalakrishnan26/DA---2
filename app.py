@@ -302,14 +302,15 @@ def show_home(df):
     st.markdown("<h1 class='main-header'>🏠 Data Overview & Summary</h1>", unsafe_allow_html=True)
 
     # 🏢 Company info (Shopora Pvt. Ltd.)
-    st.markdown("### 🏢 Company: **Shopora Pvt. Ltd.**")
+    st.markdown("### 🏢 Company: **ProcureAI UAE**")
     st.markdown("""
     **Company Overview:**  
-    Shopora Pvt. Ltd. is a mid-sized Indian e-commerce platform founded in 2018, offering fashion, electronics, 
-    and household products. It handles around 20,000 daily transactions and serves customers across multiple regions. 
-    Despite strong sales growth, the company struggles with customer retention, inefficient marketing spending, and 
-    inventory imbalances. Management now aims to leverage data analytics to enhance decision-making, improve customer 
-    experience, and ensure sustainable profitability.
+    ProcureAI UAE is an AI-powered, SaaS procurement and vendor management solution built specifically
+    for UAE small and medium enterprises. The platform automates supplier selection, risk analysis, 
+    ESG compliance tracking, and working capital optimization, all tailored to local regulatory 
+    standards and SME budgets. With predictive analytics and real-time dashboards, SMEs gain the
+    tools to minimize supply chain shocks, streamline tendering, and compete for lucrative government 
+    and corporate contracts with built-in sustainability and compliance.
     """)
 
     st.markdown("---")
